@@ -1,0 +1,533 @@
+version: '3.5'
+
+services:
+  zookeeper:
+    image: zookeeper:3.5
+    container_name: zookeeper
+    hostname: zookeeper
+    logging:
+      driver: gelf
+      options:
+        gelf-address: udp://127.0.0.1:5044
+        tag: zookeeper
+
+  clickhouse-node1:
+    image: yandex/clickhouse-server:20.4
+#    image: altinity/clickhouse-server:21.6.1.6734-testing-arm
+    container_name: clickhouse-node1
+    hostname: clickhouse-node1
+    expose:
+      - 8123
+      - 9000
+    volumes:
+      - ./data/node1:/etc/clickhouse-server
+    depends_on:
+      - zookeeper
+    logging:
+      driver: gelf
+      options:
+        gelf-address: udp://127.0.0.1:5044
+        tag: clickhouse-node1
+
+
+  clickhouse-node2:
+    image: yandex/clickhouse-server:20.4
+#    image: altinity/clickhouse-server:21.6.1.6734-testing-arm
+    container_name: clickhouse-node2
+    hostname: clickhouse-node2
+    volumes:
+      - ./data/node2:/etc/clickhouse-server
+    depends_on:
+      - zookeeper
+    logging:
+      driver: gelf
+      options:
+        gelf-address: udp://127.0.0.1:5044
+        tag: clickhouse-node2
+
+
+  zookeeper_kafka:
+    image: confluentinc/cp-zookeeper:7.4.0
+#    image: confluentinc/cp-zookeeper:7.4.0.arm64
+    hostname: zookeeper_kafka
+    container_name: zookeeper_kafka
+    expose:
+      - 2181
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    logging:
+      driver: gelf
+      options:
+        gelf-address: udp://127.0.0.1:5044
+        tag: zookeeper_kafka
+
+  kafka-connect:
+    hostname: kafka-connect
+    image: confluentinc/cp-kafka-connect:7.4.0
+#    image: confluentinc/cp-kafka-connect:7.4.0.arm64
+    container_name: kafka-connect
+    depends_on:
+      - schema-registry
+      - big_data_redis
+    expose:
+      - 8083
+    environment:
+      CONNECT_BOOTSTRAP_SERVERS: broker:29092
+      CONNECT_REST_PORT: 8083
+      CONNECT_GROUP_ID: "quickstart-avro"
+      CONNECT_CONFIG_STORAGE_TOPIC: "quickstart-avro-config"
+      CONNECT_OFFSET_STORAGE_TOPIC: "quickstart-avro-offsets"
+      CONNECT_STATUS_STORAGE_TOPIC: "quickstart-avro-status"
+      CONNECT_CONFIG_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_OFFSET_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_STATUS_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_KEY_CONVERTER: "org.apache.kafka.connect.json.JsonConverter"
+      CONNECT_VALUE_CONVERTER: "org.apache.kafka.connect.json.JsonConverter"
+      CONNECT_INTERNAL_KEY_CONVERTER: "org.apache.kafka.connect.json.JsonConverter"
+      CONNECT_INTERNAL_VALUE_CONVERTER: "org.apache.kafka.connect.json.JsonConverter"
+      CONNECT_REST_ADVERTISED_HOST_NAME : "kafka-connect"
+      CONNECT_LOG4J_ROOT_LOGLEVEL: INFO
+      CONNECT_PLUGIN_PATH: /usr/share/java,/etc/kafka-connect/jars
+    volumes:
+      - ./jars:/etc/kafka-connect/jars
+    logging:
+      driver: gelf
+      options:
+        gelf-address: udp://127.0.0.1:5044
+        tag: kafka-connect
+
+  broker:
+    image: confluentinc/cp-server:7.4.0
+#    image: confluentinc/cp-server:7.4.0.arm64
+    hostname: broker
+    container_name: broker
+    depends_on:
+      - zookeeper_kafka
+    expose:
+      - 9092
+      - 9101
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: 'zookeeper_kafka:2181'
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://broker:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_METRIC_REPORTERS: io.confluent.metrics.reporter.ConfluentMetricsReporter
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_CONFLUENT_LICENSE_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_CONFLUENT_BALANCER_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_JMX_PORT: 9101
+      KAFKA_JMX_HOSTNAME: localhost
+      KAFKA_CONFLUENT_SCHEMA_REGISTRY_URL: http://schema-registry:8081
+      CONFLUENT_METRICS_REPORTER_BOOTSTRAP_SERVERS: broker:29092
+      CONFLUENT_METRICS_REPORTER_TOPIC_REPLICAS: 1
+      CONFLUENT_METRICS_ENABLE: 'true'
+      CONFLUENT_SUPPORT_CUSTOMER_ID: 'anonymous'
+    logging:
+      driver: gelf
+      options:
+        gelf-address: udp://127.0.0.1:5044
+        tag: broker
+
+  schema-registry:
+    image: confluentinc/cp-schema-registry:7.4.0
+#    image: confluentinc/cp-schema-registry:7.4.0.arm64
+    hostname: schema-registry
+    container_name: schema-registry
+    depends_on:
+      - broker
+    expose:
+      - 8081
+    environment:
+      SCHEMA_REGISTRY_HOST_NAME: schema-registry
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: 'broker:29092'
+      SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8081
+    logging:
+      driver: gelf
+      options:
+        gelf-address: udp://127.0.0.1:5044
+        tag: schema-registry
+
+
+  control-center:
+    image: confluentinc/cp-enterprise-control-center:7.4.0
+#    image: confluentinc/cp-enterprise-control-center:7.4.0.arm64
+    hostname: control-center
+    container_name: control-center
+    depends_on:
+      - broker
+      - schema-registry
+      - kafka-connect
+    expose:
+      - 9021
+    environment:
+      CONTROL_CENTER_BOOTSTRAP_SERVERS: 'broker:29092'
+      CONTROL_CENTER_CONNECT_CLUSTER: 'kafka-connect:8083'
+      CONTROL_CENTER_KSQL_KSQLDB1_URL: "http://ksqldb-server:8088"
+      CONTROL_CENTER_KSQL_KSQLDB1_ADVERTISED_URL: "http://localhost:8088"
+      CONTROL_CENTER_SCHEMA_REGISTRY_URL: "http://schema-registry:8081"
+      CONTROL_CENTER_REPLICATION_FACTOR: 1
+      CONTROL_CENTER_INTERNAL_TOPICS_PARTITIONS: 1
+      CONTROL_CENTER_MONITORING_INTERCEPTOR_TOPIC_PARTITIONS: 1
+      CONFLUENT_METRICS_TOPIC_REPLICATION: 1
+      PORT: 9021
+    logging:
+      driver: gelf
+      options:
+        gelf-address: udp://127.0.0.1:5044
+        tag: control-center
+
+  rest-proxy:
+    image: confluentinc/cp-kafka-rest:7.4.0
+#    image: confluentinc/cp-kafka-rest:7.4.0.arm64
+    expose:
+      - 8082
+    depends_on:
+      - broker
+      - schema-registry
+    hostname: rest-proxy
+    container_name: rest-proxy
+    environment:
+      KAFKA_REST_HOST_NAME: rest-proxy
+      KAFKA_REST_BOOTSTRAP_SERVERS: 'broker:29092'
+      KAFKA_REST_LISTENERS: "http://0.0.0.0:8082"
+      KAFKA_REST_SCHEMA_REGISTRY_URL: 'http://schema-registry:8081'
+    logging:
+      driver: gelf
+      options:
+        gelf-address: udp://127.0.0.1:5044
+        tag: rest-proxy
+
+  big_data_redis:
+    image: redis
+    expose:
+      - 6379
+    logging:
+      driver: gelf
+      options:
+        gelf-address: udp://127.0.0.1:5044
+        tag: big_data_redis
+
+
+  big_data:
+    build:
+      context: ./
+    restart: unless-stopped
+    ports:
+      - 8001:8001
+    depends_on:
+      - broker
+      - big_data_redis
+    env_file:
+      - ./.env
+    logging:
+      driver: gelf
+      options:
+        gelf-address: udp://127.0.0.1:5044
+        tag: ugc_app
+
+  ## Router
+  router01:
+    image: mongo:6.0.1
+    container_name: router-01
+    command: mongos --port 27017 --configdb rs-config-server/configsvr01:27017,configsvr02:27017,configsvr03:27017 --bind_ip_all
+    expose:
+      - 27017
+    restart: always
+    volumes:
+      - ./scripts:/scripts
+      - ./mongo/mongodb_cluster_router01_db:/data/db
+      - ./mongo/mongodb_cluster_router01_config:/data/configdb
+    logging:
+      driver: gelf
+      options:
+        gelf-address: udp://127.0.0.1:5044
+        tag: router-01
+
+  router02:
+    image: mongo:6.0.1
+    container_name: router-02
+    command: mongos --port 27017 --configdb rs-config-server/configsvr01:27017,configsvr02:27017,configsvr03:27017 --bind_ip_all
+    volumes:
+      - ./scripts:/scripts
+      - ./mongo/mongodb_cluster_router02_db:/data/db
+      - ./mongo/mongodb_cluster_router02_config:/data/configdb
+    expose:
+      - 27017
+    restart: always
+    links:
+      - router01
+    logging:
+      driver: gelf
+      options:
+        gelf-address: udp://127.0.0.1:5044
+        tag: router-02
+
+  ## Config Servers
+  configsvr01:
+    image: mongo:6.0.1
+    container_name: mongo-config-01
+    command: mongod --port 27017 --configsvr --replSet rs-config-server
+    volumes:
+      - ./scripts:/scripts
+      - ./mongo/mongodb_cluster_configsvr01_db:/data/db
+      - ./mongo/mongodb_cluster_configsvr01_config:/data/configdb
+    expose:
+      - 27017
+    restart: always
+    links:
+      - shard01-a
+      - shard02-a
+      - shard03-a
+    logging:
+      driver: gelf
+      options:
+        gelf-address: udp://127.0.0.1:5044
+        tag: mongo-config-01
+
+  configsvr02:
+    image: mongo:6.0.1
+    container_name: mongo-config-02
+    command: mongod --port 27017 --configsvr --replSet rs-config-server
+    volumes:
+      - ./scripts:/scripts
+      - ./mongo/mongodb_cluster_configsvr02_db:/data/db
+      - ./mongo/mongodb_cluster_configsvr02_config:/data/configdb
+    expose:
+      - 27017
+    restart: always
+    links:
+      - configsvr01
+    logging:
+      driver: gelf
+      options:
+        gelf-address: udp://127.0.0.1:5044
+        tag: mongo-config-02
+
+  configsvr03:
+    image: mongo:6.0.1
+    container_name: mongo-config-03
+    command: mongod --port 27017 --configsvr --replSet rs-config-server
+    volumes:
+      - ./scripts:/scripts
+      - ./mongo/mongodb_cluster_configsvr03_db:/data/db
+      - ./mongo/mongodb_cluster_configsvr03_config:/data/configdb
+    expose:
+      - 27017
+    restart: always
+    links:
+      - configsvr02
+    logging:
+      driver: gelf
+      options:
+        gelf-address: udp://127.0.0.1:5044
+        tag: mongo-config-03
+
+  ## Shards
+  ## Shards 01
+
+  shard01-a:
+    image: mongo:6.0.1
+    container_name: shard-01-node-a
+    command: mongod --port 27017 --shardsvr --replSet rs-shard-01
+    volumes:
+      - ./scripts:/scripts
+      - ./mongo/mongodb_cluster_shard01_a_db:/data/db
+      - ./mongo/mongodb_cluster_shard01_a_config:/data/configdb
+    expose:
+      - 27017
+    restart: always
+    links:
+      - shard01-b
+      - shard01-c
+    logging:
+      driver: gelf
+      options:
+        gelf-address: udp://127.0.0.1:5044
+        tag: shard-01-node-a
+
+  shard01-b:
+    image: mongo:6.0.1
+    container_name: shard-01-node-b
+    command: mongod --port 27017 --shardsvr --replSet rs-shard-01
+    volumes:
+      - ./scripts:/scripts
+      - ./mongo/mongodb_cluster_shard01_b_db:/data/db
+      - ./mongo/mongodb_cluster_shard01_b_config:/data/configdb
+    expose:
+      - 27017
+    restart: always
+    logging:
+      driver: gelf
+      options:
+        gelf-address: udp://127.0.0.1:5044
+        tag: shard-01-node-b
+
+  shard01-c:
+    image: mongo:6.0.1
+    container_name: shard-01-node-c
+    command: mongod --port 27017 --shardsvr --replSet rs-shard-01
+    volumes:
+      - ./scripts:/scripts
+      - ./mongo/mongodb_cluster_shard01_c_db:/data/db
+      - ./mongo/mongodb_cluster_shard01_c_config:/data/configdb
+    expose:
+      - 27017
+    restart: always
+    logging:
+      driver: gelf
+      options:
+        gelf-address: udp://127.0.0.1:5044
+        tag: shard-01-node-c
+
+  ## Shards 02
+  shard02-a:
+    image: mongo:6.0.1
+    container_name: shard-02-node-a
+    command: mongod --port 27017 --shardsvr --replSet rs-shard-02
+    volumes:
+      - ./scripts:/scripts
+      - ./mongo/mongodb_cluster_shard02_a_db:/data/db
+      - ./mongo/mongodb_cluster_shard02_a_config:/data/configdb
+    expose:
+      - 27017
+    restart: always
+    links:
+      - shard02-b
+      - shard02-c
+    logging:
+      driver: gelf
+      options:
+        gelf-address: udp://127.0.0.1:5044
+        tag: shard-02-node-a
+
+  shard02-b:
+    image: mongo:6.0.1
+    container_name: shard-02-node-b
+    command: mongod --port 27017 --shardsvr --replSet rs-shard-02
+    volumes:
+      - ./scripts:/scripts
+      - ./mongo/mongodb_cluster_shard02_b_db:/data/db
+      - ./mongo/mongodb_cluster_shard02_b_config:/data/configdb
+    expose:
+      - 27017
+    restart: always
+    logging:
+      driver: gelf
+      options:
+        gelf-address: udp://127.0.0.1:5044
+        tag: shard-02-node-b
+
+  shard02-c:
+    image: mongo:6.0.1
+    container_name: shard-02-node-c
+    command: mongod --port 27017 --shardsvr --replSet rs-shard-02
+    volumes:
+      - ./scripts:/scripts
+      - ./mongo/mongodb_cluster_shard02_c_db:/data/db
+      - ./mongo/mongodb_cluster_shard02_c_config:/data/configdb
+    expose:
+      - 27017
+    restart: always
+    logging:
+      driver: gelf
+      options:
+        gelf-address: udp://127.0.0.1:5044
+        tag: shard-02-node-c
+
+
+  ## Shards 03
+  shard03-a:
+    image: mongo:6.0.1
+    container_name: shard-03-node-a
+    command: mongod --port 27017 --shardsvr --replSet rs-shard-03
+    volumes:
+      - ./scripts:/scripts
+      - ./mongo/mongodb_cluster_shard03_a_db:/data/db
+      - ./mongo/mongodb_cluster_shard03_a_config:/data/configdb
+    expose:
+      - 27017
+    restart: always
+    links:
+      - shard03-b
+      - shard03-c
+    logging:
+      driver: gelf
+      options:
+        gelf-address: udp://127.0.0.1:5044
+        tag: shard-03-node-a
+
+  shard03-b:
+    image: mongo:6.0.1
+    container_name: shard-03-node-b
+    command: mongod --port 27017 --shardsvr --replSet rs-shard-03
+    volumes:
+      - ./scripts:/scripts
+      - ./mongo/mongodb_cluster_shard03_b_db:/data/db
+      - ./mongo/mongodb_cluster_shard03_b_config:/data/configdb
+    expose:
+      - 27017
+    restart: always
+    logging:
+      driver: gelf
+      options:
+        gelf-address: udp://127.0.0.1:5044
+        tag: shard-03-node-b
+
+
+  shard03-c:
+    image: mongo:6.0.1
+    container_name: shard-03-node-c
+    command: mongod --port 27017 --shardsvr --replSet rs-shard-03
+    volumes:
+      - ./scripts:/scripts
+      - ./mongo/mongodb_cluster_shard03_c_db:/data/db
+      - ./mongo/mongodb_cluster_shard03_c_config:/data/configdb
+    expose:
+      - 27017
+    restart: always
+    logging:
+      driver: gelf
+      options:
+        gelf-address: udp://127.0.0.1:5044
+        tag: shard-03-node-c
+
+
+  logstash:
+    image: logstash:7.17.9
+    environment:
+      # Так как сейчас вы хотите запустить logstash без Elasticsearch, необходимо отключить встроенный мониторинг, отправляющий данные в ES
+      XPACK_MONITORING_ENABLED: "false"
+      ES_HOST: "elasticsearch:9200"
+    expose:
+      - 5044/udp
+    volumes:
+      # Монтируем файл с конфигурацией logstash
+      - ./logstash/logstash.conf:/config/logstash.conf:ro
+    # Запускаем с указанием конфигурационного файла
+    command: logstash -f /config/logstash.conf
+    depends_on:
+      - elasticsearch
+
+
+  elasticsearch:
+    image: elasticsearch:7.17.9
+    environment:
+      - xpack.security.enabled=false
+      - "discovery.type=single-node"
+      - ES_JAVA_OPTS=-Xms1024m -Xmx1024m
+    expose:
+      - 9200
+
+  kibana:
+    container_name: kb-container
+    image: kibana:7.17.9
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+    depends_on:
+      - elasticsearch
+    ports:
+      - 5601:5601
